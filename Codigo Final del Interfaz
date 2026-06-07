@@ -1,0 +1,195 @@
+#Proyecto 2 FSC - DispenserTEC
+#Interfaz gráfica 
+#Alexa Herrera Sánchez y Sebastián Lobo Mejía
+
+import tkinter as tk
+import requests
+import threading
+import json
+from PIL import Image, ImageTk
+
+#Descubrimiento de la Pico por WiFi
+PICO_IP   = None
+BUSCANDO  = True
+
+def descubrir_pico():
+    global PICO_IP, BUSCANDO
+    for i in range(2, 15):
+        ip = f"172.20.10.{i}"
+        try:
+            r = requests.get(f"http://{ip}/status", timeout=0.8)
+            if r.status_code == 200 and "stock" in r.json():
+                PICO_IP = ip
+                BUSCANDO = False
+                return
+        except:
+            continue
+    BUSCANDO = False  #No encontrada
+
+threading.Thread(target=descubrir_pico, daemon=True).start()
+
+#Datos
+stock            = [5, 9, 3]
+ventas           = [0, 0, 0]
+precios          = [850, 650, 900]
+nombres          = ["Coca Cola", "Sobres Mundial", "Doritos"]
+en_mantenimiento = False
+
+BG = "#4C6DFF"
+
+#Tipo de cambio
+def get_tipo_cambio():
+    try:
+        r = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=5)
+        return r.json()["rates"]["CRC"]
+    except:
+        return 520
+
+tipo_cambio = get_tipo_cambio()
+
+#Comunicación con la Rasp
+def pico_get(ruta, timeout=3):
+    if not PICO_IP:
+        return None
+    try:
+        r = requests.get(f"http://{PICO_IP}{ruta}", timeout=timeout)
+        return r.json()
+    except:
+        return None
+
+def actualizar_desde_pico():
+    """Hilo que sincroniza stock y ventas desde la Pico cada segundo."""
+    while True:
+        datos = pico_get("/status")
+        if datos:
+            for i in range(3):
+                stock[i]  = datos["stock"][i]
+                ventas[i] = datos["ventas"][i]
+        threading.Event().wait(1)
+
+threading.Thread(target=actualizar_desde_pico, daemon=True).start()
+
+#Helpers UI
+def hacer_btn(parent, texto, comando, color="#7EB8F7", side=None, **pack_opts):
+    lbl = tk.Label(parent, text=texto, bg=color, fg="white",
+                   padx=14, pady=8, cursor="hand2", width=28,
+                   font=("Arial", 13, "bold"))
+    lbl.bind("<Button-1>", lambda e: comando())
+    if side:
+        lbl.pack(side=side)
+    else:
+        lbl.pack(**pack_opts)
+    return lbl
+
+#PANTALLA 2 — Administración
+def abrir_admin():
+    admin = tk.Toplevel(ventana)
+    admin.title("Administración")
+    admin.geometry("400x380")
+    admin.resizable(False, False)
+    admin.configure(bg=BG)
+
+    tk.Label(admin, text="Administración", font=("Arial", 14, "bold"),
+             bg=BG, fg="white").pack(pady=8)
+
+    frame_stock = tk.LabelFrame(admin, text="Stock actual", padx=10, pady=5,
+                                bg=BG, fg="white")
+    frame_stock.pack(fill="x", padx=20, pady=4)
+
+    lbl_stock = []
+    for i in range(3):
+        f = tk.Frame(frame_stock, bg=BG)
+        f.pack(fill="x")
+        tk.Label(f, text=f"{nombres[i]}:", width=16, anchor="w",
+                 bg=BG, fg="white").pack(side="left")
+        lbl = tk.Label(f, text=str(stock[i]), bg=BG, fg="white")
+        lbl.pack(side="left")
+        lbl_stock.append(lbl)
+
+    frame_stats = tk.LabelFrame(admin, text="Estadísticas", padx=10, pady=5,
+                                bg=BG, fg="white")
+    frame_stats.pack(fill="x", padx=20, pady=4)
+
+    lbl_ventas = []
+    for i in range(3):
+        f = tk.Frame(frame_stats, bg=BG)
+        f.pack(fill="x")
+        tk.Label(f, text=f"Ventas {nombres[i]}:", width=20, anchor="w",
+                 bg=BG, fg="white").pack(side="left")
+        lbl = tk.Label(f, text=str(ventas[i]), bg=BG, fg="white")
+        lbl.pack(side="left")
+        lbl_ventas.append(lbl)
+
+    lbl_total = tk.Label(frame_stats, text=f"Total ventas: {sum(ventas)}",
+                         anchor="w", bg=BG, fg="white")
+    lbl_total.pack(fill="x", pady=(4, 0))
+
+    ganancias_col = sum(ventas[i] * precios[i] for i in range(3))
+    lbl_col = tk.Label(frame_stats, text=f"Ganancias: ₡{ganancias_col:,}",
+                       anchor="w", bg=BG, fg="white")
+    lbl_col.pack(fill="x")
+
+    lbl_usd = tk.Label(frame_stats,
+                       text=f"Equivalente: ${ganancias_col / tipo_cambio:.2f}",
+                       anchor="w", bg=BG, fg="white")
+    lbl_usd.pack(fill="x")
+
+    estado_txt = "EN MANTENIMIENTO" if en_mantenimiento else "Operativa"
+    estado_col = "#FF6B6B" if en_mantenimiento else "#6BFF9E"
+    lbl_estado = tk.Label(frame_stats, text=f"Estado máquina: {estado_txt}",
+                          fg=estado_col, anchor="w", bg=BG)
+    lbl_estado.pack(fill="x", pady=(4, 0))
+
+    def actualizar():
+        for i in range(3):
+            lbl_stock[i].config(text=str(stock[i]))
+            lbl_ventas[i].config(text=str(ventas[i]))
+        lbl_total.config(text=f"Total ventas: {sum(ventas)}")
+        g = sum(ventas[i] * precios[i] for i in range(3))
+        lbl_col.config(text=f"Ganancias: ₡{g:,}")
+        lbl_usd.config(text=f"Equivalente: ${g / tipo_cambio:.2f}")
+        t = "EN MANTENIMIENTO" if en_mantenimiento else "Operativa"
+        c = "#FF6B6B" if en_mantenimiento else "#6BFF9E"
+        lbl_estado.config(text=f"Estado máquina: {t}", fg=c)
+        admin.after(1000, actualizar)
+
+    actualizar()
+
+    frame_btns = tk.Frame(admin, bg=BG)
+    frame_btns.pack(fill="x", side="bottom", padx=10, pady=8)
+    hacer_btn(frame_btns, "Cerrar", ventana.destroy, color="#A8D8EA", side="left")
+    hacer_btn(frame_btns, "Volver", admin.destroy,   color="#A8D8EA", side="right")
+
+#PANTALLA 1 — Principal
+def toggle_mantenimiento():
+    global en_mantenimiento
+    nueva = not en_mantenimiento
+    ruta = "/on" if nueva else "/off"
+    threading.Thread(target=lambda: pico_get(ruta), daemon=True).start()
+    en_mantenimiento = nueva
+    if en_mantenimiento:
+        btn_mant.config(text="Desactivar mantenimiento", bg="orange")
+    else:
+        btn_mant.config(text="Poner máquina en mantenimiento", bg="#7EB8F7")
+
+ventana = tk.Tk()
+ventana.title("DispenserTEC")
+ventana.geometry("650x550")
+ventana.configure(bg=BG)
+ventana.resizable(False, False)
+
+#Imagen del titulo
+ruta_imagen = "/Users/alexaherrerasanchez/Desktop/DispenserTEC/Titulo.png"
+imagen = Image.open(ruta_imagen).convert("RGBA")
+fondo  = Image.new("RGBA", imagen.size, (76, 109, 255))
+fondo.paste(imagen, mask=imagen.split()[3])
+imagen = fondo.convert("RGB")
+imagen = imagen.resize((500, 330), Image.LANCZOS)
+img_inicio = ImageTk.PhotoImage(imagen)
+
+tk.Label(ventana, image=img_inicio, bg=BG).pack(pady=(70, 8))
+hacer_btn(ventana, "Ver administración", abrir_admin, pady=(0, 8))
+btn_mant = hacer_btn(ventana, "Poner máquina en mantenimiento",
+                     toggle_mantenimiento, pady=(0, 8))
+
+ventana.mainloop()
